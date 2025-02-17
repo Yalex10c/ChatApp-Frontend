@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { io } from "socket.io-client";
 
 function App() {
@@ -6,12 +6,40 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
   const [username, setUsername] = useState("");
-  const [serverURL, setServerURL] = useState("");  
-  const [serverIP, setServerIP] = useState("");    
+  const [serverURL, setServerURL] = useState("");
+  const [serverIP, setServerIP] = useState("");
   const [serverPort, setServerPort] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionType, setConnectionType] = useState("ngrok"); 
+  const [connectionType, setConnectionType] = useState("ngrok");
+  const [image, setimage] = useState(null);
+
+  useEffect(() => {
+    console.log("Image updated:", image);
+  }, [image]);
+
+  useEffect(() => {
+    console.log("Messages updated:", messages);
+  }, [messages]);
+
+  const emojiMap = {
+    laugh: "😂",
+    devil: "👿",
+    starstruck: "🤩",
+    heart:"❤️"
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setimage(reader.result);
+        setErrorMessage("");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const connectToServer = () => {
     let finalURL = "";
@@ -30,12 +58,22 @@ function App() {
       finalURL = `http://${serverIP}:${serverPort}`;
     }
 
+    if (!image) {
+      setErrorMessage("Debes subir una foto antes de continuar.");
+      return;
+    }
+
+    const data = {
+      username: username,
+      profilephoto: image,
+    };
+
     try {
       const newSocket = io(finalURL, {
         transports: ["websocket"],
         reconnection: true,
         reconnectionAttempts: 5,
-        reconnectionDelay: 1000
+        reconnectionDelay: 1000,
       });
 
       setSocket(newSocket);
@@ -44,12 +82,12 @@ function App() {
       newSocket.on("connect", () => {
         console.log("Connected to server:", newSocket.id);
         setIsConnected(true);
-        newSocket.emit("setUsername", username);
+        newSocket.emit("setprofile", data);
       });
 
-      newSocket.on("messageHistory", (history) => {
-        console.log("Received message history:", history);
-        setMessages(history);
+      newSocket.on("messageHistory", (historial) => {
+        console.log("Received message history:", historial);
+        setMessages(historial);
       });
 
       newSocket.on("message", (data) => {
@@ -57,11 +95,18 @@ function App() {
         setMessages((prevMessages) => [...prevMessages, data]);
       });
 
+      newSocket.on("reaction", (updatedMessage) => {
+        setMessages((prevMessages) => {
+          return prevMessages.map((msg) =>
+            msg._id === updatedMessage._id ? updatedMessage : msg
+          );
+        });
+      });
+
       newSocket.on("disconnect", () => {
         console.log("Disconnected from server");
         setIsConnected(false);
       });
-
     } catch (error) {
       setErrorMessage("Failed to connect. Check the server details.");
       console.error("Connection error:", error);
@@ -78,9 +123,27 @@ function App() {
   };
 
   const sendMessage = () => {
-    if (socket && inputMessage.trim()) {
-      socket.emit("message", inputMessage);
-      setInputMessage("");
+    if (socket && (inputMessage.trim() || image)) {
+      console.log("Mensaje a enviar:", inputMessage);
+      console.log("Imagen a enviar:", image);
+
+      setTimeout(() => {
+        socket.emit("message", {
+          message: inputMessage || "",
+          image: image || "",
+        });
+
+        setInputMessage("");
+        setimage(null);
+      }, 100);
+    }
+  };
+
+  const sendReaction = (messageId, reactionCode) => {
+    if (socket) {
+      console.log(messageId);
+      console.log(reactionCode);
+      socket.emit("reaction", { messageId, username, reactionCode });
     }
   };
 
@@ -100,7 +163,47 @@ function App() {
                   key={index}
                   className="p-2 bg-gray-700 rounded border border-gray-600"
                 >
-                  {msg}
+                  {msg.profilephoto && (
+                    <img
+                      src={msg.profilephoto}
+                      alt="User"
+                      className="w-10 h-10 rounded-full mr-2 border border-gray-500"
+                    />
+                  )}
+                  <div>
+                    {msg.message}
+                    <div className="mt-2 flex space-x-2">
+                      {Object.keys(emojiMap).map((key) => (
+                        <button
+                          key={key}
+                          className="bg-gray-600 hover:bg-gray-700 p-1 rounded relative"
+                          onClick={() => sendReaction(msg._id, key)}
+                        >
+                          {emojiMap[key]}
+                          {Array.isArray(msg.reactions) &&
+                            msg.reactions.filter(
+                              (reaction) => reaction?.reactionCode === key
+                            ).length > 0 && (
+                              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full px-1">
+                                {
+                                  msg.reactions.filter(
+                                    (reaction) => reaction?.reactionCode === key
+                                  ).length
+                                }
+                                  
+                              </span>
+                            )}
+                        </button>
+                      ))}
+                    </div>
+                    {msg.media && msg.media.trim().length > 0 && (
+                      <img
+                        src={msg.media}
+                        alt="User upload"
+                        className="mt-2 w-40 rounded"
+                      />
+                    )}
+                  </div>
                 </li>
               ))
             )}
@@ -148,7 +251,12 @@ function App() {
               />
             </>
           )}
-
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="p-2 bg-gray-700 border border-gray-600 rounded w-full mb-4"
+          />
           <input
             type="text"
             value={username}
@@ -156,14 +264,25 @@ function App() {
             placeholder="Enter Username"
             className="p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-
+          {image && (
+            <div className="flex flex-col items-center">
+              <p className="text-sm text-gray-400">Profile Photo Preview:</p>
+              <img
+                src={image}
+                alt="Preview"
+                className="mt-2 w-20 h-20 rounded-full border border-gray-600"
+              />
+            </div>
+          )}
           <button
             onClick={connectToServer}
             className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
           >
             Connect to Server
           </button>
-          {errorMessage && <p className="text-red-500 text-sm">{errorMessage}</p>}
+          {errorMessage && (
+            <p className="text-red-500 text-sm">{errorMessage}</p>
+          )}
         </div>
       ) : (
         <>
@@ -188,6 +307,20 @@ function App() {
               >
                 Send
               </button>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      setimage(reader.result);
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
             </div>
           </div>
         </>
